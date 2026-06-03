@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "support-agent-mcp"
+version = "0.1.0"
+description = "Autonomous support ticket agent MCP server — stateful, multi-tenant, built on edge-llm-core"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Apache-2.0" }
+keywords = ["mcp", "support", "helpdesk", "agent", "llm", "edge-llm"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3.11",
+]
+dependencies = [
+    "edge-llm-core>=0.1.0",
+    "anthropic>=0.40.0,<2.0",
+    "mcp>=1.0.0",
+]
+
+[project.optional-dependencies]
+redis  = ["redis>=5.0.0"]
+all    = ["support-agent-mcp[redis]"]
+dev    = ["pytest>=8.0", "build", "twine"]
+
+[project.scripts]
+support-agent-mcp = "support_agent_mcp.server:main"
+
+[project.urls]
+Homepage   = "https://github.com/dado458/support-agent-mcp"
+Repository = "https://github.com/dado458/support-agent-mcp"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"support_agent_mcp" = ["prompts/*.md"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
