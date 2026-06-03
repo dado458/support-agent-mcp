@@ -21,9 +21,14 @@
 
 ## Install
 
+> **Note:** PyPI publication is planned for v1.0.0 (stable release).
+> Until then, install directly from GitHub:
+
 ```bash
-pip install support-agent-mcp
+pip install git+https://github.com/dado458/support-agent-mcp.git
 ```
+
+> Once published to PyPI (v1.0.0), installation will simplify to `pip install support-agent-mcp`.
 
 ## Quick start
 
