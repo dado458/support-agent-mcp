@@ -39,7 +39,7 @@ class SupportAgent(EdgeAgent):
     def get_tools(self) -> list[dict]:
         return SUPPORT_TOOLS
 
-    def get_tool_map(self) -> dict[str, callable]:
+    def get_tool_map(self, tenant_id: str = "") -> dict[str, callable]:
         mem = self._memory
         return {
             "triage_ticket":       lambda **kw: triage_ticket(**kw),
