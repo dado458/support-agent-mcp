@@ -139,7 +139,51 @@ def test_search_knowledge_base_with_category():
     assert result["category"] == "billing"
 
 
+def test_search_knowledge_base_keyword_hit():
+    kb = "## Login issues\n403 error usually means an expired session token. Ask user to log out and back in.\n\n## Billing\nRefunds take 5-7 business days."
+    result = search_knowledge_base(query="403 login session", kb_text=kb)
+    assert result["source"] == "keyword"
+    assert any("403" in r or "session" in r for r in result["results"])
+
+
+def test_search_knowledge_base_keyword_no_match():
+    kb = "## Billing\nRefunds take 5-7 business days."
+    result = search_knowledge_base(query="completely unrelated topic xyz", kb_text=kb)
+    assert result["results"] == []
+    assert "hint" in result
+
+
+def test_search_knowledge_base_vector_store_used_when_available():
+    from unittest.mock import MagicMock
+    mock_store = MagicMock()
+    mock_store.count.return_value = 2
+    mock_store.search.return_value = ["Reset your password from Settings > Security."]
+
+    result = search_knowledge_base(query="how to reset password",
+                                   kb_store=mock_store, tenant_id="t1")
+    assert result["source"] == "vector"
+    assert result["results"] == ["Reset your password from Settings > Security."]
+
+
+def test_search_knowledge_base_vector_store_falls_back_to_keyword_when_empty():
+    from unittest.mock import MagicMock
+    mock_store = MagicMock()
+    mock_store.count.return_value = 0
+
+    kb = "## Passwords\nReset your password from Settings > Security."
+    result = search_knowledge_base(query="password reset", kb_store=mock_store,
+                                    tenant_id="t1", kb_text=kb)
+    assert result["source"] == "keyword"
+
+
 # ── Tool: update_ticket ───────────────────────────────────────────────────────
+
+def test_update_ticket_new_entity_no_prior_state(tmp_path):
+    """Regression: update_ticket crashed when the entity had no prior state."""
+    mem = LocalMemoryStore(tmp_path)
+    update_ticket(ticket_id="brand-new", new_stage="TRIAGING", memory=mem)
+    assert mem.get_entity_state("brand-new")["stage"] == "TRIAGING"
+
 
 def test_update_ticket_without_memory():
     result = update_ticket(ticket_id="ticket-1", new_stage="IN_PROGRESS")
@@ -181,6 +225,13 @@ def test_update_ticket_recovers_corrupted_notes(tmp_path):
 
 # ── Tool: escalate_ticket ─────────────────────────────────────────────────────
 
+def test_escalate_ticket_new_entity_no_prior_state(tmp_path):
+    """Regression: escalate_ticket crashed when the entity had no prior state."""
+    mem = LocalMemoryStore(tmp_path)
+    escalate_ticket(ticket_id="brand-new", reason="needs senior eng", memory=mem)
+    assert mem.get_entity_state("brand-new")["stage"] == "ESCALATED"
+
+
 def test_escalate_ticket_without_memory():
     result = escalate_ticket(ticket_id="t1", reason="requires DB access")
     assert result["escalated"] is True
@@ -202,6 +253,25 @@ def test_escalate_ticket_persists_to_memory(tmp_path):
 def test_escalate_ticket_default_urgency():
     result = escalate_ticket(ticket_id="t1", reason="complex issue")
     assert result["urgency"] == "medium"
+
+
+def test_escalate_ticket_notifies_webhook_when_configured():
+    from unittest.mock import MagicMock
+    webhook = MagicMock()
+
+    escalate_ticket(ticket_id="t1", reason="data corruption suspected",
+                    urgency="critical", webhook=webhook)
+
+    webhook.post.assert_called_once()
+    payload = webhook.post.call_args[0][0]
+    assert payload["ticket_id"] == "t1"
+    assert payload["urgency"] == "critical"
+    assert "t1" in payload["text"]
+
+
+def test_escalate_ticket_no_webhook_call_when_not_configured():
+    result = escalate_ticket(ticket_id="t1", reason="complex issue")
+    assert result["escalated"] is True
 
 
 # ── SupportAgent ──────────────────────────────────────────────────────────────
@@ -267,3 +337,40 @@ def test_agent_tool_map_complete(agent):
 def test_agent_tool_map_all_callable(agent):
     for name, fn in agent.get_tool_map().items():
         assert callable(fn), f"Tool '{name}' is not callable"
+
+
+def test_agent_tool_map_wires_escalation_webhook_from_tenant_meta(agent, monkeypatch):
+    from edge_llm.core.tenants.base import TenantConfig
+    agent._tenants.save(TenantConfig(
+        tenant_id="t1", meta={"escalation_webhook_url": "https://hooks.example.com/escalate"},
+    ))
+
+    calls = []
+
+    class _FakeResponse:
+        def raise_for_status(self): pass
+
+    def fake_post(url, json, timeout):
+        calls.append((url, json))
+        return _FakeResponse()
+
+    monkeypatch.setattr("httpx.post", fake_post)
+
+    escalate_fn = agent.get_tool_map(tenant_id="t1")["escalate_ticket"]
+    escalate_fn(ticket_id="t1", reason="needs senior eng")
+
+    assert len(calls) == 1
+    assert calls[0][0] == "https://hooks.example.com/escalate"
+    assert calls[0][1]["ticket_id"] == "t1"
+
+
+def test_agent_tool_map_resolves_kb_text_from_tenant_meta(agent):
+    from edge_llm.core.tenants.base import TenantConfig
+    agent._tenants.save(TenantConfig(
+        tenant_id="t1",
+        meta={"knowledge_base": "## Login\n403 means an expired session — log out and back in."},
+    ))
+
+    search_fn = agent.get_tool_map(tenant_id="t1")["search_knowledge_base"]
+    result = search_fn(query="403 session expired")
+    assert result["source"] == "keyword"

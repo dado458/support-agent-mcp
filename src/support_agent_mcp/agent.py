@@ -1,6 +1,8 @@
 from pathlib import Path
+from typing import Optional
 
 from edge_llm.core.agent import EdgeAgent
+from edge_llm.core.catalog import AbstractCatalogStore
 from edge_llm.core.state_machine import StateMachine, StageContext
 from edge_llm.core.tenants.base import TenantConfig
 
@@ -21,6 +23,10 @@ _DEFAULT_META = {
 
 class SupportAgent(EdgeAgent):
 
+    def __init__(self, *args, kb_store: Optional[AbstractCatalogStore] = None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._kb_store = kb_store
+
     def get_state_machine(self) -> StateMachine:
         return SupportPipeline()
 
@@ -40,12 +46,31 @@ class SupportAgent(EdgeAgent):
         return SUPPORT_TOOLS
 
     def get_tool_map(self, tenant_id: str = "") -> dict[str, callable]:
-        mem = self._memory
+        mem      = self._memory
+        kb_store = self._kb_store
+        # Resolve per-tenant config from meta (keyword KB text fallback, escalation webhook).
+        kb_text            = ""
+        escalation_webhook = None
+        if tenant_id:
+            try:
+                meta = self._tenants.get(tenant_id).meta
+                kb_text = meta.get("knowledge_base", "")
+                webhook_url = meta.get("escalation_webhook_url", "")
+                if webhook_url:
+                    from edge_llm.core.integrations import WebhookClient
+                    escalation_webhook = WebhookClient(webhook_url)
+            except KeyError:
+                pass
         return {
-            "triage_ticket":       lambda **kw: triage_ticket(**kw),
-            "search_knowledge_base": lambda **kw: search_knowledge_base(**kw),
-            "update_ticket":       lambda **kw: update_ticket(**kw, memory=mem),
-            "escalate_ticket":     lambda **kw: escalate_ticket(**kw, memory=mem),
+            "triage_ticket": lambda **kw: triage_ticket(**kw),
+            "search_knowledge_base": lambda **kw: search_knowledge_base(
+                **kw,
+                kb_store=kb_store,
+                kb_text=kb_text,
+                tenant_id=tenant_id,
+            ),
+            "update_ticket":   lambda **kw: update_ticket(**kw, memory=mem),
+            "escalate_ticket": lambda **kw: escalate_ticket(**kw, memory=mem, webhook=escalation_webhook),
         }
 
     def initial_entity_state(self) -> dict:
